@@ -1,17 +1,17 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.ovden13/trilium-mcp",
+  "name": "io.github.OVDEN13/trilium-mcp",
   "title": "TriliumNext (trilium-mcp)",
   "description": "Read and write a self-hosted TriliumNext knowledge base over its ETAPI.",
   "repository": {
     "url": "https://github.com/OVDEN13/trilium-mcp",
     "source": "github"
   },
-  "version": "0.1.1",
+  "version": "0.1.2",
   "packages": [
     {
       "registryType": "oci",
-      "identifier": "ghcr.io/ovden13/trilium-mcp:0.1.1",
+      "identifier": "ghcr.io/ovden13/trilium-mcp:0.1.2",
       "transport": {
         "type": "stdio"
       },

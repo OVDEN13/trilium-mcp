@@ -70,7 +70,7 @@ jobs:
             ghcr.io/ovden13/trilium-mcp:${{ steps.ver.outputs.version }}
             ghcr.io/ovden13/trilium-mcp:latest
           labels: |
-            io.modelcontextprotocol.server.name=io.github.ovden13/trilium-mcp
+            io.modelcontextprotocol.server.name=io.github.OVDEN13/trilium-mcp
             org.opencontainers.image.source=https://github.com/OVDEN13/trilium-mcp
             org.opencontainers.image.version=${{ steps.ver.outputs.version }}
             org.opencontainers.image.revision=${{ github.sha }}

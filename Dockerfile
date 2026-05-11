@@ -6,7 +6,7 @@ COPY . .
 RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /out/trilium-mcp .
 
 FROM alpine:3.20 AS runtime
-LABEL io.modelcontextprotocol.server.name="io.github.ovden13/trilium-mcp"
+LABEL io.modelcontextprotocol.server.name="io.github.OVDEN13/trilium-mcp"
 LABEL org.opencontainers.image.source="https://github.com/OVDEN13/trilium-mcp"
 LABEL org.opencontainers.image.description="MCP server that lets AI agents read/write a self-hosted TriliumNext KB over ETAPI."
 LABEL org.opencontainers.image.licenses="MIT"
