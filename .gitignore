@@ -1,0 +1,8 @@
+.env
+bin/
+trilium-mcp
+trilium-mcp-*
+*.exe
+.DS_Store
+.idea/
+.vscode/

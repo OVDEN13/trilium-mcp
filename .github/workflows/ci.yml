@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+          cache: true
+      - run: go vet ./...
+      - run: go build -ldflags="-s -w" -o trilium-mcp .
+      - name: Smoke test (MCP initialize handshake)
+        env:
+          TRILIUM_URL: http://127.0.0.1:9999
+          TRILIUM_TOKEN: dummy
+        run: |
+          printf '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"ci","version":"0"}}}\n' \
+            | timeout 5 ./trilium-mcp \
+            | grep -q '"name":"trilium-mcp"'
