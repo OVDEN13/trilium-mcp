@@ -1,0 +1,39 @@
+# Smithery configuration: https://smithery.ai/docs/config#smitheryyaml
+startCommand:
+  type: stdio
+  configSchema:
+    type: object
+    required:
+      - triliumUrl
+      - triliumToken
+    properties:
+      triliumUrl:
+        type: string
+        title: Trilium URL
+        description: Base URL of the Trilium ETAPI (e.g. https://memo.example.com).
+          Must be reachable from wherever this MCP server runs.
+      triliumToken:
+        type: string
+        title: ETAPI token
+        description: ETAPI token from Trilium (Options → ETAPI → Create new ETAPI token).
+        format: password
+      logLevel:
+        type: string
+        title: Log level
+        enum: [off, info, debug]
+        default: info
+        description: stderr log verbosity for tool calls.
+  commandFunction:
+    |-
+    (config) => ({
+      command: '/usr/local/bin/trilium-mcp',
+      env: {
+        TRILIUM_URL: config.triliumUrl,
+        TRILIUM_TOKEN: config.triliumToken,
+        TRILIUM_MCP_LOG: config.logLevel || 'info'
+      }
+    })
+  exampleConfig:
+    triliumUrl: https://memo.example.com
+    triliumToken: REPLACE_WITH_YOUR_ETAPI_TOKEN
+    logLevel: info
