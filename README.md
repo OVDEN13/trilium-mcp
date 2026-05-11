@@ -167,6 +167,7 @@ Full reference: [Trilium search docs](https://github.com/TriliumNext/Notes/wiki/
 | `TRILIUM_URL` | *required* | e.g. `http://localhost:8092` or `https://memo.example.com` |
 | `TRILIUM_TOKEN` | *required* | ETAPI token from Trilium settings |
 | `TRILIUM_HTTP_TIMEOUT_SECONDS` | `30` | Per-request timeout |
+| `TRILIUM_MCP_LOG` | `info` | `off` / `info` / `debug`. Logs are written to **stderr** (stdout is reserved for the MCP JSON-RPC stream). `info` shows one line per tool call with name + duration + ok/error. `debug` also shows the request arguments and a truncated preview of the response. |
 
 ## Building from source
 

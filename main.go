@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -19,8 +20,28 @@ const (
 	serverVersion = "0.1.0"
 )
 
+type logLevel int
+
+const (
+	logOff logLevel = iota
+	logInfo
+	logDebug
+)
+
+func parseLogLevel(s string) logLevel {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "off", "0", "false", "no":
+		return logOff
+	case "debug", "verbose", "2":
+		return logDebug
+	default:
+		return logInfo
+	}
+}
+
 type handlers struct {
-	c *Client
+	c   *Client
+	lvl logLevel
 }
 
 func main() {
@@ -38,7 +59,15 @@ func main() {
 		}
 	}
 
-	h := &handlers{c: NewClient(baseURL, token, timeout)}
+	lvl := parseLogLevel(os.Getenv("TRILIUM_MCP_LOG"))
+	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
+	log.SetPrefix("[trilium-mcp] ")
+
+	h := &handlers{c: NewClient(baseURL, token, timeout), lvl: lvl}
+
+	if lvl != logOff {
+		log.Printf("starting %s v%s — trilium=%s timeout=%s log=%s", serverName, serverVersion, baseURL, timeout, logLevelName(lvl))
+	}
 
 	probeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -54,6 +83,64 @@ func main() {
 	if err := server.ServeStdio(s); err != nil {
 		log.Fatalf("server error: %v", err)
 	}
+}
+
+func logLevelName(l logLevel) string {
+	switch l {
+	case logOff:
+		return "off"
+	case logDebug:
+		return "debug"
+	default:
+		return "info"
+	}
+}
+
+func (h *handlers) withLogging(name string, fn server.ToolHandlerFunc) server.ToolHandlerFunc {
+	if h.lvl == logOff {
+		return fn
+	}
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		start := time.Now()
+		if h.lvl >= logDebug {
+			args, _ := json.Marshal(req.GetArguments())
+			log.Printf("→ %s args=%s", name, truncate(string(args), 300))
+		} else {
+			log.Printf("→ %s", name)
+		}
+		result, err := fn(ctx, req)
+		dur := time.Since(start).Round(time.Microsecond)
+		switch {
+		case err != nil:
+			log.Printf("← %s exec-error in %s: %v", name, dur, err)
+		case result != nil && result.IsError:
+			log.Printf("← %s tool-error in %s: %s", name, dur, summarizeResult(result, 160))
+		case h.lvl >= logDebug:
+			log.Printf("← %s ok in %s: %s", name, dur, summarizeResult(result, 300))
+		default:
+			log.Printf("← %s ok in %s", name, dur)
+		}
+		return result, err
+	}
+}
+
+func summarizeResult(r *mcp.CallToolResult, max int) string {
+	if r == nil {
+		return ""
+	}
+	for _, c := range r.Content {
+		if tc, ok := c.(mcp.TextContent); ok {
+			return truncate(strings.ReplaceAll(tc.Text, "\n", " "), max)
+		}
+	}
+	return ""
+}
+
+func truncate(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "…"
 }
 
 func (h *handlers) register(s *server.MCPServer) {
@@ -85,14 +172,14 @@ func (h *handlers) register(s *server.MCPServer) {
 		mcp.WithString("type", mcp.Description("Note type: text|code|book|relationMap|... default text")),
 		mcp.WithString("mime", mcp.Description("MIME type, e.g. text/html, text/markdown, application/json")),
 		mcp.WithObject("labels", mcp.Description("Map of label name->value to attach immediately after creation")),
-	), h.createNote)
+	), h.withLogging("create_note", h.createNote))
 
 	s.AddTool(mcp.NewTool("get_note",
 		mcp.WithDescription("Fetch a note's metadata and (optionally) its body content."),
 		mcp.WithToolAnnotation(readOnly),
 		mcp.WithString("note_id", mcp.Required(), mcp.Description("Note id")),
 		mcp.WithBoolean("include_content", mcp.Description("Include body content (default false)")),
-	), h.getNote)
+	), h.withLogging("get_note", h.getNote))
 
 	s.AddTool(mcp.NewTool("update_note",
 		mcp.WithDescription("Update a note's title, type, or replace its body content. Omit a field to keep it; pass an explicit empty string to clear it."),
@@ -101,7 +188,7 @@ func (h *handlers) register(s *server.MCPServer) {
 		mcp.WithString("title", mcp.Description("New title")),
 		mcp.WithString("type", mcp.Description("New type")),
 		mcp.WithString("content", mcp.Description("Replace body with this content")),
-	), h.updateNote)
+	), h.withLogging("update_note", h.updateNote))
 
 	s.AddTool(mcp.NewTool("append_content",
 		mcp.WithDescription("Append text to a note's existing body, separated by a configurable separator."),
@@ -109,13 +196,13 @@ func (h *handlers) register(s *server.MCPServer) {
 		mcp.WithString("note_id", mcp.Required()),
 		mcp.WithString("content", mcp.Required(), mcp.Description("Text to append")),
 		mcp.WithString("separator", mcp.Description("Separator between old and new content (default \\n\\n)")),
-	), h.appendContent)
+	), h.withLogging("append_content", h.appendContent))
 
 	s.AddTool(mcp.NewTool("delete_note",
 		mcp.WithDescription("Delete a note (and its subtree)."),
 		mcp.WithToolAnnotation(destructive),
 		mcp.WithString("note_id", mcp.Required()),
-	), h.deleteNote)
+	), h.withLogging("delete_note", h.deleteNote))
 
 	s.AddTool(mcp.NewTool("search_notes",
 		mcp.WithDescription("Search notes using Trilium search syntax (e.g. '#tag', '#status=active', '\"foo bar\"', 'note.title %= \"^Re\"'). Returns up to 'limit' results."),
@@ -125,7 +212,7 @@ func (h *handlers) register(s *server.MCPServer) {
 		mcp.WithBoolean("fast_search", mcp.Description("Skip full-text body scan, search metadata only (default false)")),
 		mcp.WithBoolean("include_archived", mcp.Description("Include archived notes (default false)")),
 		mcp.WithNumber("limit", mcp.Description("Max results (default 50)")),
-	), h.searchNotes)
+	), h.withLogging("search_notes", h.searchNotes))
 
 	s.AddTool(mcp.NewTool("add_label",
 		mcp.WithDescription("Attach a label (key[=value]) to a note. Labels act as table columns in collection views."),
@@ -134,7 +221,7 @@ func (h *handlers) register(s *server.MCPServer) {
 		mcp.WithString("name", mcp.Required(), mcp.Description("Label name (without the leading #)")),
 		mcp.WithString("value", mcp.Description("Optional label value")),
 		mcp.WithBoolean("inheritable", mcp.Description("If true, child notes inherit this label")),
-	), h.addLabel)
+	), h.withLogging("add_label", h.addLabel))
 
 	s.AddTool(mcp.NewTool("add_relation",
 		mcp.WithDescription("Add a relation from one note to another (like a foreign key to another 'row')."),
@@ -143,19 +230,19 @@ func (h *handlers) register(s *server.MCPServer) {
 		mcp.WithString("name", mcp.Required(), mcp.Description("Relation name (without the leading ~)")),
 		mcp.WithString("target_note_id", mcp.Required(), mcp.Description("Target note id")),
 		mcp.WithBoolean("inheritable", mcp.Description("If true, child notes inherit this relation")),
-	), h.addRelation)
+	), h.withLogging("add_relation", h.addRelation))
 
 	s.AddTool(mcp.NewTool("remove_attribute",
 		mcp.WithDescription("Remove a label or relation by its attribute id."),
 		mcp.WithToolAnnotation(destructive),
 		mcp.WithString("attribute_id", mcp.Required()),
-	), h.removeAttribute)
+	), h.withLogging("remove_attribute", h.removeAttribute))
 
 	s.AddTool(mcp.NewTool("list_attributes",
 		mcp.WithDescription("List all labels and relations on a note."),
 		mcp.WithToolAnnotation(readOnly),
 		mcp.WithString("note_id", mcp.Required()),
-	), h.listAttributes)
+	), h.withLogging("list_attributes", h.listAttributes))
 }
 
 func boolPtr(b bool) *bool { return &b }
