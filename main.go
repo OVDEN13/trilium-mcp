@@ -57,8 +57,28 @@ func main() {
 }
 
 func (h *handlers) register(s *server.MCPServer) {
+	readOnly := mcp.ToolAnnotation{
+		ReadOnlyHint:    boolPtr(true),
+		DestructiveHint: boolPtr(false),
+		IdempotentHint:  boolPtr(true),
+		OpenWorldHint:   boolPtr(true),
+	}
+	additive := mcp.ToolAnnotation{
+		ReadOnlyHint:    boolPtr(false),
+		DestructiveHint: boolPtr(false),
+		IdempotentHint:  boolPtr(false),
+		OpenWorldHint:   boolPtr(true),
+	}
+	destructive := mcp.ToolAnnotation{
+		ReadOnlyHint:    boolPtr(false),
+		DestructiveHint: boolPtr(true),
+		IdempotentHint:  boolPtr(true),
+		OpenWorldHint:   boolPtr(true),
+	}
+
 	s.AddTool(mcp.NewTool("create_note",
 		mcp.WithDescription("Create a new note in Trilium. Returns the new note's id and basic metadata."),
+		mcp.WithToolAnnotation(additive),
 		mcp.WithString("title", mcp.Required(), mcp.Description("Note title")),
 		mcp.WithString("content", mcp.Description("Note body. For type=text expect HTML; for type=code use raw text.")),
 		mcp.WithString("parent_note_id", mcp.Description("Parent note id; defaults to 'root'")),
@@ -69,12 +89,14 @@ func (h *handlers) register(s *server.MCPServer) {
 
 	s.AddTool(mcp.NewTool("get_note",
 		mcp.WithDescription("Fetch a note's metadata and (optionally) its body content."),
+		mcp.WithToolAnnotation(readOnly),
 		mcp.WithString("note_id", mcp.Required(), mcp.Description("Note id")),
 		mcp.WithBoolean("include_content", mcp.Description("Include body content (default false)")),
 	), h.getNote)
 
 	s.AddTool(mcp.NewTool("update_note",
 		mcp.WithDescription("Update a note's title, type, or replace its body content. Omit a field to keep it; pass an explicit empty string to clear it."),
+		mcp.WithToolAnnotation(destructive),
 		mcp.WithString("note_id", mcp.Required()),
 		mcp.WithString("title", mcp.Description("New title")),
 		mcp.WithString("type", mcp.Description("New type")),
@@ -83,6 +105,7 @@ func (h *handlers) register(s *server.MCPServer) {
 
 	s.AddTool(mcp.NewTool("append_content",
 		mcp.WithDescription("Append text to a note's existing body, separated by a configurable separator."),
+		mcp.WithToolAnnotation(additive),
 		mcp.WithString("note_id", mcp.Required()),
 		mcp.WithString("content", mcp.Required(), mcp.Description("Text to append")),
 		mcp.WithString("separator", mcp.Description("Separator between old and new content (default \\n\\n)")),
@@ -90,11 +113,13 @@ func (h *handlers) register(s *server.MCPServer) {
 
 	s.AddTool(mcp.NewTool("delete_note",
 		mcp.WithDescription("Delete a note (and its subtree)."),
+		mcp.WithToolAnnotation(destructive),
 		mcp.WithString("note_id", mcp.Required()),
 	), h.deleteNote)
 
 	s.AddTool(mcp.NewTool("search_notes",
 		mcp.WithDescription("Search notes using Trilium search syntax (e.g. '#tag', '#status=active', '\"foo bar\"', 'note.title %= \"^Re\"'). Returns up to 'limit' results."),
+		mcp.WithToolAnnotation(readOnly),
 		mcp.WithString("query", mcp.Required(), mcp.Description("Trilium search expression")),
 		mcp.WithString("ancestor_note_id", mcp.Description("Restrict search to descendants of this note")),
 		mcp.WithBoolean("fast_search", mcp.Description("Skip full-text body scan, search metadata only (default false)")),
@@ -104,6 +129,7 @@ func (h *handlers) register(s *server.MCPServer) {
 
 	s.AddTool(mcp.NewTool("add_label",
 		mcp.WithDescription("Attach a label (key[=value]) to a note. Labels act as table columns in collection views."),
+		mcp.WithToolAnnotation(additive),
 		mcp.WithString("note_id", mcp.Required()),
 		mcp.WithString("name", mcp.Required(), mcp.Description("Label name (without the leading #)")),
 		mcp.WithString("value", mcp.Description("Optional label value")),
@@ -112,6 +138,7 @@ func (h *handlers) register(s *server.MCPServer) {
 
 	s.AddTool(mcp.NewTool("add_relation",
 		mcp.WithDescription("Add a relation from one note to another (like a foreign key to another 'row')."),
+		mcp.WithToolAnnotation(additive),
 		mcp.WithString("note_id", mcp.Required()),
 		mcp.WithString("name", mcp.Required(), mcp.Description("Relation name (without the leading ~)")),
 		mcp.WithString("target_note_id", mcp.Required(), mcp.Description("Target note id")),
@@ -120,14 +147,18 @@ func (h *handlers) register(s *server.MCPServer) {
 
 	s.AddTool(mcp.NewTool("remove_attribute",
 		mcp.WithDescription("Remove a label or relation by its attribute id."),
+		mcp.WithToolAnnotation(destructive),
 		mcp.WithString("attribute_id", mcp.Required()),
 	), h.removeAttribute)
 
 	s.AddTool(mcp.NewTool("list_attributes",
 		mcp.WithDescription("List all labels and relations on a note."),
+		mcp.WithToolAnnotation(readOnly),
 		mcp.WithString("note_id", mcp.Required()),
 	), h.listAttributes)
 }
+
+func boolPtr(b bool) *bool { return &b }
 
 func okJSON(v any) (*mcp.CallToolResult, error) {
 	b, err := json.MarshalIndent(v, "", "  ")
