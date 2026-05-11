@@ -3,10 +3,14 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  # Manual trigger for re-publishing an existing tag (e.g. after fixing the
+  # workflow itself). Pass the tag name in `ref` when dispatching.
+  workflow_dispatch:
 
 permissions:
   contents: write
   packages: write
+  id-token: write
 
 jobs:
   binaries:
@@ -75,3 +79,24 @@ jobs:
             org.opencontainers.image.version=${{ steps.ver.outputs.version }}
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.licenses=MIT
+
+  publish-registry:
+    # Publish server.json to the MCP Registry using GitHub OIDC — no PAT or
+    # interactive `mcp-publisher login github` needed. The Registry exchanges
+    # the workflow's id-token for a short-lived publish token automatically.
+    needs: docker
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install mcp-publisher
+        run: |
+          curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_linux_amd64.tar.gz" \
+            | tar xz mcp-publisher
+          ./mcp-publisher --help >/dev/null
+      - name: Authenticate via GitHub OIDC
+        run: ./mcp-publisher login github-oidc
+      - name: Publish server.json to MCP Registry
+        run: ./mcp-publisher publish
