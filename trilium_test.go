@@ -47,8 +47,53 @@ func TestClient_AuthHeader(t *testing.T) {
 
 func TestClient_BaseURL_TrailingSlashTrimmed(t *testing.T) {
 	c := NewClient("http://example.com/", "tok", 0)
-	if c.baseURL != "http://example.com" {
-		t.Errorf("baseURL = %q, want %q", c.baseURL, "http://example.com")
+	urls := c.URLs()
+	if len(urls) != 1 || urls[0] != "http://example.com" {
+		t.Errorf("URLs() = %v, want [http://example.com]", urls)
+	}
+}
+
+func TestClient_FallbackToSecondURL_OnTransportError(t *testing.T) {
+	// First URL: a port nothing is listening on -> connection refused.
+	// Second URL: a real test server that succeeds.
+	good := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"appVersion":"x"}`))
+	}))
+	t.Cleanup(good.Close)
+	c := NewClient("http://127.0.0.1:1/,"+good.URL, "tok", 2*time.Second)
+	if _, err := c.AppInfo(context.Background()); err != nil {
+		t.Fatalf("AppInfo should have fallen back and succeeded: %v", err)
+	}
+}
+
+func TestClient_DoesNotFallback_OnHTTPError(t *testing.T) {
+	// Both URLs respond, but the first one with 404. Client should NOT fall back —
+	// a 404 from the server is a real answer, not a transport failure.
+	firstHits, secondHits := 0, 0
+	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		firstHits++
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"code":"NOT_FOUND"}`))
+	}))
+	t.Cleanup(first.Close)
+	second := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		secondHits++
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	t.Cleanup(second.Close)
+	c := NewClient(first.URL+","+second.URL, "tok", 2*time.Second)
+	if _, err := c.AppInfo(context.Background()); err == nil {
+		t.Fatal("expected error from first URL")
+	}
+	if firstHits != 1 || secondHits != 0 {
+		t.Errorf("first=%d second=%d, want 1,0 (no fallback on HTTP 404)", firstHits, secondHits)
+	}
+}
+
+func TestClient_AllURLsDown_ReturnsLastError(t *testing.T) {
+	c := NewClient("http://127.0.0.1:1/,http://127.0.0.1:2/", "tok", 2*time.Second)
+	if _, err := c.AppInfo(context.Background()); err == nil {
+		t.Fatal("expected error when all URLs unreachable")
 	}
 }
 

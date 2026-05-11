@@ -164,7 +164,7 @@ Full reference: [Trilium search docs](https://github.com/TriliumNext/Notes/wiki/
 
 | Var | Default | Notes |
 | --- | --- | --- |
-| `TRILIUM_URL` | *required* | e.g. `http://localhost:8092` or `https://memo.example.com` |
+| `TRILIUM_URL` | *required* | Base URL of your Trilium ETAPI. Accepts multiple URLs separated by commas — the server tries them in order and falls back to the next one on transport errors (DNS/connection/timeout). HTTP errors like 404 are returned immediately without retry. Example: `http://192.168.0.10:8092,https://memo.example.com` (fast LAN first, public fallback). |
 | `TRILIUM_TOKEN` | *required* | ETAPI token from Trilium settings |
 | `TRILIUM_HTTP_TIMEOUT_SECONDS` | `30` | Per-request timeout |
 | `TRILIUM_MCP_LOG` | `info` | `off` / `info` / `debug`. Logs are written to **stderr** (stdout is reserved for the MCP JSON-RPC stream). `info` shows one line per tool call with name + duration + ok/error. `debug` also shows the request arguments and a truncated preview of the response. |

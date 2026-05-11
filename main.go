@@ -17,7 +17,7 @@ import (
 
 const (
 	serverName    = "trilium-mcp"
-	serverVersion = "0.1.2"
+	serverVersion = "0.1.3"
 )
 
 type logLevel int
@@ -66,7 +66,7 @@ func main() {
 	h := &handlers{c: NewClient(baseURL, token, timeout), lvl: lvl}
 
 	if lvl != logOff {
-		log.Printf("starting %s v%s — trilium=%s timeout=%s log=%s", serverName, serverVersion, baseURL, timeout, logLevelName(lvl))
+		log.Printf("starting %s v%s — trilium=%s timeout=%s log=%s", serverName, serverVersion, strings.Join(h.c.URLs(), ","), timeout, logLevelName(lvl))
 	}
 
 	probeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
