@@ -17,7 +17,7 @@ import (
 
 const (
 	serverName    = "trilium-mcp"
-	serverVersion = "0.1.0"
+	serverVersion = "0.1.1"
 )
 
 type logLevel int
