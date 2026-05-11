@@ -7,11 +7,11 @@
     "url": "https://github.com/OVDEN13/trilium-mcp",
     "source": "github"
   },
-  "version": "0.1.4",
+  "version": "0.1.5",
   "packages": [
     {
       "registryType": "oci",
-      "identifier": "ghcr.io/ovden13/trilium-mcp:0.1.4",
+      "identifier": "ghcr.io/ovden13/trilium-mcp:0.1.5",
       "transport": {
         "type": "stdio"
       },

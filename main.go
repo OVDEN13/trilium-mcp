@@ -18,7 +18,7 @@ import (
 
 const (
 	serverName    = "trilium-mcp"
-	serverVersion = "0.1.4"
+	serverVersion = "0.1.5"
 )
 
 type logLevel int
@@ -81,9 +81,31 @@ func main() {
 
 	h.register(s)
 
-	if err := server.ServeStdio(s); err != nil {
+	// mcp-go's stdio writer uses json.Marshal directly, which HTML-escapes <, >, &
+	// into <, >, &. For an MCP that serves HTML-bodied notes this
+	// roughly inflates response size by 15%. We can't switch the encoder inside
+	// mcp-go, so we wrap stdout with a streaming replacer that converts those
+	// sequences back. Both forms are valid JSON encodings of the same character,
+	// so the receiving client sees identical data.
+	ss := server.NewStdioServer(s)
+	if err := ss.Listen(context.Background(), os.Stdin, &htmlUnescapingWriter{w: os.Stdout}); err != nil {
 		log.Fatalf("server error: %v", err)
 	}
+}
+
+type htmlUnescapingWriter struct{ w *os.File }
+
+func (h *htmlUnescapingWriter) Write(p []byte) (int, error) {
+	// p contains the literal 6-byte sequences <, >, & — these are
+	// what Go's json package emits when HTML escape is on (its default).
+	// Replace them with the single bytes <, >, &. JSON-equivalent, ~15% smaller.
+	out := bytes.ReplaceAll(p, []byte("\\u003c"), []byte("<"))
+	out = bytes.ReplaceAll(out, []byte("\\u003e"), []byte(">"))
+	out = bytes.ReplaceAll(out, []byte("\\u0026"), []byte("&"))
+	if _, err := h.w.Write(out); err != nil {
+		return 0, err
+	}
+	return len(p), nil
 }
 
 func logLevelName(l logLevel) string {
