@@ -59,10 +59,11 @@ def main():
         ok(f"server: {init['result']['serverInfo']['name']} v{init['result']['serverInfo']['version']}")
         m.call("notifications/initialized", want_response=False)
         tools = m.call("tools/list")["result"]["tools"]
-        names = sorted(t["name"] for t in tools)
-        expected = sorted(["create_note","get_note","update_note","append_content","delete_note","search_notes","add_label","add_relation","remove_attribute","list_attributes"])
-        assert names == expected, f"missing tools: {set(expected)-set(names)}"
-        ok(f"all 10 tools registered: {names}")
+        names = set(t["name"] for t in tools)
+        expected = {"create_note","get_note","update_note","append_content","delete_note","search_notes","add_label","add_relation","remove_attribute","list_attributes"}
+        missing = expected - names
+        assert not missing, f"missing core tools: {missing}"
+        ok(f"all 10 core tools registered (server total: {len(tools)})")
 
         section("create_note (with labels)")
         a = m.tool("create_note", {"title":"e2e note A","content":"<p>row A</p>","labels":{"e2e":"full","kind":"a"}})

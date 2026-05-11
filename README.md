@@ -19,10 +19,16 @@ It is intentionally minimal: ten tools, ~600 lines of Go, zero clever abstractio
 | Tool | Purpose |
 | --- | --- |
 | `create_note` | Create a note (optionally under a parent, with labels in one shot). |
+| `batch_create_notes` | Create many notes in one call — saves per-call schema overhead during restructuring. |
 | `get_note` | Fetch note metadata; optionally include body content. |
-| `update_note` | Replace title, type, or body. Omit a field to leave it; pass empty string to clear. |
+| `get_note_subtree` | Recursively fetch a note + descendants up to N levels as a nested tree — replaces N+1 `get_note` calls. |
+| `update_note` | Partial update: include only the fields you want to change; omitted fields stay as-is. |
 | `append_content` | Append text to the body with a configurable separator. |
 | `delete_note` | Delete a note and its subtree. |
+| `batch_delete_notes` | Delete many notes; partial failures don't stop the rest. |
+| `move_note` | Re-parent a note in two ETAPI calls (vs the old read-recreate-delete dance). |
+| `clone_note` | Add the note under an additional parent — Trilium-native multi-parent links. |
+| `delete_branch` | Remove one parent-child link without deleting the note (un-clone). |
 | `search_notes` | Full-power Trilium search (`#label`, `~relation`, `note.title %= "regex"`, ancestor scoping, etc.). |
 | `add_label` | Attach a label (`#key=value`) — acts as a "column" in collection views. |
 | `add_relation` | Attach a relation (`~name → noteId`) — like a foreign key between notes. |

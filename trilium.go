@@ -312,3 +312,37 @@ func (c *Client) CreateAttribute(ctx context.Context, attr Attribute) (*Attribut
 func (c *Client) DeleteAttribute(ctx context.Context, attributeID string) error {
 	return c.do(ctx, "DELETE", "/etapi/attributes/"+url.PathEscape(attributeID), nil, nil)
 }
+
+type Branch struct {
+	BranchID     string `json:"branchId,omitempty"`
+	NoteID       string `json:"noteId"`
+	ParentNoteID string `json:"parentNoteId"`
+	Prefix       string `json:"prefix,omitempty"`
+	NotePosition int    `json:"notePosition,omitempty"`
+	IsExpanded   bool   `json:"isExpanded,omitempty"`
+}
+
+// CreateBranch attaches an existing note to a new parent. If a branch between
+// noteId and parentNoteId already exists, Trilium updates it instead of
+// creating a duplicate (returns 200 vs 201; both yield a Branch).
+func (c *Client) CreateBranch(ctx context.Context, b Branch) (*Branch, error) {
+	var out Branch
+	if err := c.do(ctx, "POST", "/etapi/branches", b, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// DeleteBranch removes a single parent-child link. If the note has other
+// parents the note itself stays. If this was the only branch, Trilium deletes
+// the note too.
+func (c *Client) DeleteBranch(ctx context.Context, branchID string) error {
+	return c.do(ctx, "DELETE", "/etapi/branches/"+url.PathEscape(branchID), nil, nil)
+}
+
+// BranchID computes Trilium's deterministic branch id from a parent/note pair.
+// The format is `<parentNoteId>_<noteId>` — Trilium uses this same convention
+// internally (verified empirically and consistent with the public ETAPI).
+func BranchID(parentNoteID, noteID string) string {
+	return parentNoteID + "_" + noteID
+}

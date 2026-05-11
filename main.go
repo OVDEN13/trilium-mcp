@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -17,7 +18,7 @@ import (
 
 const (
 	serverName    = "trilium-mcp"
-	serverVersion = "0.1.3"
+	serverVersion = "0.1.4"
 )
 
 type logLevel int
@@ -171,7 +172,7 @@ func (h *handlers) register(s *server.MCPServer) {
 		mcp.WithString("parent_note_id", mcp.Description("Parent note id; defaults to 'root'")),
 		mcp.WithString("type", mcp.Description("Note type: text|code|book|relationMap|... default text")),
 		mcp.WithString("mime", mcp.Description("MIME type, e.g. text/html, text/markdown, application/json")),
-		mcp.WithObject("labels", mcp.Description("Map of label name->value to attach immediately after creation")),
+		mcp.WithObject("labels", mcp.Description("Map of label name -> value to attach immediately after creation. Pass as a JSON object, e.g. {\"host\":\"mac-mini\",\"category\":\"runbooks\"} — NOT as a stringified JSON.")),
 	), h.withLogging("create_note", h.createNote))
 
 	s.AddTool(mcp.NewTool("get_note",
@@ -182,7 +183,7 @@ func (h *handlers) register(s *server.MCPServer) {
 	), h.withLogging("get_note", h.getNote))
 
 	s.AddTool(mcp.NewTool("update_note",
-		mcp.WithDescription("Update a note's title, type, or replace its body content. Omit a field to keep it; pass an explicit empty string to clear it."),
+		mcp.WithDescription("Patch a note's title, type, and/or replace its body content. Partial: any field you OMIT stays unchanged; any field you INCLUDE (even with an empty string) is applied. To update only the title, send {note_id, title} and skip content."),
 		mcp.WithToolAnnotation(destructive),
 		mcp.WithString("note_id", mcp.Required()),
 		mcp.WithString("title", mcp.Description("New title")),
@@ -208,7 +209,7 @@ func (h *handlers) register(s *server.MCPServer) {
 		mcp.WithDescription("Search notes using Trilium search syntax (e.g. '#tag', '#status=active', '\"foo bar\"', 'note.title %= \"^Re\"'). Returns up to 'limit' results."),
 		mcp.WithToolAnnotation(readOnly),
 		mcp.WithString("query", mcp.Required(), mcp.Description("Trilium search expression")),
-		mcp.WithString("ancestor_note_id", mcp.Description("Restrict search to descendants of this note")),
+		mcp.WithString("ancestor_note_id", mcp.Description("Scope the search to one subtree — only notes that are descendants of this note are returned. This is the correct way to limit search to a 'folder' like '🔧 Runbooks'.")),
 		mcp.WithBoolean("fast_search", mcp.Description("Skip full-text body scan, search metadata only (default false)")),
 		mcp.WithBoolean("include_archived", mcp.Description("Include archived notes (default false)")),
 		mcp.WithNumber("limit", mcp.Description("Max results (default 50)")),
@@ -243,16 +244,70 @@ func (h *handlers) register(s *server.MCPServer) {
 		mcp.WithToolAnnotation(readOnly),
 		mcp.WithString("note_id", mcp.Required()),
 	), h.withLogging("list_attributes", h.listAttributes))
+
+	s.AddTool(mcp.NewTool("move_note",
+		mcp.WithDescription("Move a note from one parent to another by re-parenting its branch. Performs two ETAPI calls (create branch under new parent, delete old branch) — cheap compared to get+recreate+delete. If the note has multiple parents, you must pass from_parent_id; otherwise the single existing parent is used automatically."),
+		mcp.WithToolAnnotation(destructive),
+		mcp.WithString("note_id", mcp.Required()),
+		mcp.WithString("new_parent_id", mcp.Required(), mcp.Description("The new parent note id")),
+		mcp.WithString("from_parent_id", mcp.Description("Required only if the note has multiple parents; pick the parent you want to detach from")),
+		mcp.WithNumber("position", mcp.Description("Optional position among siblings under the new parent (Trilium uses 10/20/30 spacing)")),
+	), h.withLogging("move_note", h.moveNote))
+
+	s.AddTool(mcp.NewTool("clone_note",
+		mcp.WithDescription("Add the note under an additional parent without removing it from existing parents (Trilium 'clone' = shared note across multiple tree locations). One ETAPI call."),
+		mcp.WithToolAnnotation(additive),
+		mcp.WithString("note_id", mcp.Required()),
+		mcp.WithString("new_parent_id", mcp.Required(), mcp.Description("The parent under which to attach this note as a clone")),
+		mcp.WithString("prefix", mcp.Description("Optional per-branch prefix shown in the tree (e.g. 'see also:')")),
+		mcp.WithNumber("position", mcp.Description("Optional position among siblings under the new parent")),
+	), h.withLogging("clone_note", h.cloneNote))
+
+	s.AddTool(mcp.NewTool("delete_branch",
+		mcp.WithDescription("Delete a single parent-child link (one Trilium branch) without deleting the note. Use this to un-clone — i.e. remove a note from one of its parents while keeping it in the others. If the deleted branch was the note's last one, Trilium deletes the note itself."),
+		mcp.WithToolAnnotation(destructive),
+		mcp.WithString("branch_id", mcp.Required(), mcp.Description("Branch id, formatted as `<parentNoteId>_<noteId>`")),
+	), h.withLogging("delete_branch", h.deleteBranch))
+
+	s.AddTool(mcp.NewTool("batch_create_notes",
+		mcp.WithDescription("Create many notes in a single tool call. Each item has the same fields as create_note (title, content, parent_note_id, type, mime, labels). Use when restructuring or seeding a section — saves the per-call schema overhead an agent pays for repeated create_note calls."),
+		mcp.WithToolAnnotation(additive),
+		mcp.WithArray("notes", mcp.Required(), mcp.Description("Array of note specs. Each: {title (required), content?, parent_note_id?, type?, mime?, labels?}")),
+	), h.withLogging("batch_create_notes", h.batchCreateNotes))
+
+	s.AddTool(mcp.NewTool("batch_delete_notes",
+		mcp.WithDescription("Delete many notes by id. Each note is attempted independently; the response reports `deleted` and `failed` arrays so partial failures don't stop the rest."),
+		mcp.WithToolAnnotation(destructive),
+		mcp.WithArray("note_ids", mcp.Required(), mcp.Description("Array of note ids to delete")),
+	), h.withLogging("batch_delete_notes", h.batchDeleteNotes))
+
+	s.AddTool(mcp.NewTool("get_note_subtree",
+		mcp.WithDescription("Recursively fetch a note plus its descendants up to max_depth levels as a single nested tree — replaces N+1 get_note calls when navigating a section. Bodies are NOT included by default (saves tokens); set include_content=true if you need them. Attributes are included by default."),
+		mcp.WithToolAnnotation(readOnly),
+		mcp.WithString("note_id", mcp.Required()),
+		mcp.WithNumber("max_depth", mcp.Description("How deep to recurse. 0 = just the root note. 1 = root + direct children. Default 2.")),
+		mcp.WithBoolean("include_content", mcp.Description("Include body content of each note (default false — saves tokens)")),
+		mcp.WithNumber("limit", mcp.Description("Hard cap on total notes returned (default 200) — protects against accidental fetches of huge trees")),
+	), h.withLogging("get_note_subtree", h.getNoteSubtree))
 }
 
 func boolPtr(b bool) *bool { return &b }
 
 func okJSON(v any) (*mcp.CallToolResult, error) {
-	b, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
+	// SetEscapeHTML(false) keeps raw <, >, &, in the output instead of the
+	// < > & forms that encoding/json defaults to. This matters
+	// for AI agents reading note HTML — escaped output costs ~15% extra tokens
+	// and is harder to scan.
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(v); err != nil {
 		return mcp.NewToolResultError("failed to marshal result: " + err.Error()), nil
 	}
-	return mcp.NewToolResultText(string(b)), nil
+	// json.Encoder appends a trailing newline — drop it.
+	out := strings.TrimRight(buf.String(), "\n")
+	return mcp.NewToolResultText(out), nil
 }
 
 func errResult(format string, args ...any) (*mcp.CallToolResult, error) {
@@ -548,4 +603,288 @@ func (h *handlers) listAttributes(ctx context.Context, req mcp.CallToolRequest) 
 		"note_id":    note.NoteID,
 		"attributes": note.Attributes,
 	})
+}
+
+func (h *handlers) moveNote(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	noteID := argString(req, "note_id")
+	newParent := argString(req, "new_parent_id")
+	if noteID == "" || newParent == "" {
+		return errResult("'note_id' and 'new_parent_id' are required")
+	}
+	fromParent := argString(req, "from_parent_id")
+	if fromParent == "" {
+		// Look up the note's parents and require unambiguity.
+		note, err := h.c.GetNote(ctx, noteID)
+		if err != nil {
+			return errResult("move_note: failed to read note: %v", err)
+		}
+		switch len(note.ParentNoteIDs) {
+		case 0:
+			return errResult("move_note: note %s has no parents — nothing to move from", noteID)
+		case 1:
+			fromParent = note.ParentNoteIDs[0]
+		default:
+			return errResult("move_note: note %s has %d parents (%v) — pass from_parent_id to disambiguate", noteID, len(note.ParentNoteIDs), note.ParentNoteIDs)
+		}
+	}
+	if fromParent == newParent {
+		return errResult("move_note: from_parent_id and new_parent_id are the same (%s)", newParent)
+	}
+	// Create the new branch first, then drop the old one. If create fails we
+	// haven't broken anything; if delete fails the note temporarily has both
+	// parents (a clone), which is recoverable.
+	b := Branch{NoteID: noteID, ParentNoteID: newParent}
+	b.NotePosition = argInt(req, "position", 0)
+	created, err := h.c.CreateBranch(ctx, b)
+	if err != nil {
+		return errResult("move_note: create new branch failed: %v", err)
+	}
+	if err := h.c.DeleteBranch(ctx, BranchID(fromParent, noteID)); err != nil {
+		return errResult("move_note: branch attached to new parent (%s) but failed to remove old branch from %s: %v", created.BranchID, fromParent, err)
+	}
+	return okJSON(map[string]any{
+		"note_id":          noteID,
+		"new_parent_id":    newParent,
+		"old_parent_id":    fromParent,
+		"new_branch_id":    created.BranchID,
+		"removed_branch":   BranchID(fromParent, noteID),
+	})
+}
+
+func (h *handlers) cloneNote(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	noteID := argString(req, "note_id")
+	newParent := argString(req, "new_parent_id")
+	if noteID == "" || newParent == "" {
+		return errResult("'note_id' and 'new_parent_id' are required")
+	}
+	b := Branch{
+		NoteID:       noteID,
+		ParentNoteID: newParent,
+		Prefix:       argString(req, "prefix"),
+		NotePosition: argInt(req, "position", 0),
+	}
+	out, err := h.c.CreateBranch(ctx, b)
+	if err != nil {
+		return errResult("clone_note failed: %v", err)
+	}
+	return okJSON(out)
+}
+
+func (h *handlers) deleteBranch(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	id := argString(req, "branch_id")
+	if id == "" {
+		return errResult("'branch_id' is required")
+	}
+	if err := h.c.DeleteBranch(ctx, id); err != nil {
+		return errResult("delete_branch failed: %v", err)
+	}
+	return okJSON(map[string]any{"deleted": id})
+}
+
+func (h *handlers) batchCreateNotes(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	raw, ok := req.GetArguments()["notes"]
+	if !ok {
+		return errResult("'notes' is required")
+	}
+	list, ok := raw.([]any)
+	if !ok {
+		return errResult("'notes' must be an array")
+	}
+	type result struct {
+		Index        int               `json:"index"`
+		NoteID       string            `json:"note_id,omitempty"`
+		Title        string            `json:"title,omitempty"`
+		BranchID     string            `json:"branch_id,omitempty"`
+		ParentNoteID string            `json:"parent_note_id,omitempty"`
+		Labels       map[string]string `json:"labels,omitempty"`
+		Error        string            `json:"error,omitempty"`
+	}
+	results := make([]result, 0, len(list))
+	for i, item := range list {
+		spec, ok := item.(map[string]any)
+		if !ok {
+			results = append(results, result{Index: i, Error: "not an object"})
+			continue
+		}
+		title, _ := spec["title"].(string)
+		if title == "" {
+			results = append(results, result{Index: i, Error: "'title' is required"})
+			continue
+		}
+		creq := CreateNoteRequest{
+			Title:        title,
+			Content:      strFrom(spec["content"]),
+			ParentNoteID: strFrom(spec["parent_note_id"]),
+			Type:         strFrom(spec["type"]),
+			Mime:         strFrom(spec["mime"]),
+		}
+		resp, err := h.c.CreateNote(ctx, creq)
+		if err != nil {
+			results = append(results, result{Index: i, Title: title, Error: err.Error()})
+			continue
+		}
+		var labels map[string]string
+		if rawLabels, ok := spec["labels"].(map[string]any); ok && len(rawLabels) > 0 {
+			labels = make(map[string]string, len(rawLabels))
+			for k, v := range rawLabels {
+				labels[k] = coerceString(v)
+				if _, err := h.c.CreateAttribute(ctx, Attribute{
+					NoteID: resp.Note.NoteID, Type: "label", Name: k, Value: labels[k],
+				}); err != nil {
+					results = append(results, result{
+						Index: i, Title: title, NoteID: resp.Note.NoteID, BranchID: resp.Branch.BranchID, ParentNoteID: resp.Branch.ParentNoteID, Labels: labels,
+						Error: fmt.Sprintf("note created but label %q failed: %v", k, err),
+					})
+					goto next
+				}
+			}
+		}
+		results = append(results, result{
+			Index: i, Title: title, NoteID: resp.Note.NoteID, BranchID: resp.Branch.BranchID,
+			ParentNoteID: resp.Branch.ParentNoteID, Labels: labels,
+		})
+	next:
+	}
+	created, failed := 0, 0
+	for _, r := range results {
+		if r.Error == "" {
+			created++
+		} else {
+			failed++
+		}
+	}
+	return okJSON(map[string]any{
+		"created": created,
+		"failed":  failed,
+		"results": results,
+	})
+}
+
+func (h *handlers) batchDeleteNotes(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	raw, ok := req.GetArguments()["note_ids"]
+	if !ok {
+		return errResult("'note_ids' is required")
+	}
+	list, ok := raw.([]any)
+	if !ok {
+		return errResult("'note_ids' must be an array of strings")
+	}
+	deleted := make([]string, 0, len(list))
+	failed := make([]map[string]string, 0)
+	for _, item := range list {
+		id, ok := item.(string)
+		if !ok || id == "" {
+			failed = append(failed, map[string]string{"id": fmt.Sprintf("%v", item), "error": "not a non-empty string"})
+			continue
+		}
+		if err := h.c.DeleteNote(ctx, id); err != nil {
+			failed = append(failed, map[string]string{"id": id, "error": err.Error()})
+			continue
+		}
+		deleted = append(deleted, id)
+	}
+	return okJSON(map[string]any{
+		"deleted": deleted,
+		"failed":  failed,
+	})
+}
+
+func (h *handlers) getNoteSubtree(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	rootID := argString(req, "note_id")
+	if rootID == "" {
+		return errResult("'note_id' is required")
+	}
+	maxDepth := argInt(req, "max_depth", 2)
+	if maxDepth < 0 {
+		maxDepth = 0
+	}
+	limit := argInt(req, "limit", 200)
+	if limit <= 0 {
+		limit = 200
+	}
+	includeContent := argBool(req, "include_content")
+
+	type node struct {
+		NoteID     string      `json:"note_id"`
+		Title      string      `json:"title"`
+		Type       string      `json:"type"`
+		Attributes []Attribute `json:"attributes,omitempty"`
+		Content    string      `json:"content,omitempty"`
+		Children   []*node     `json:"children,omitempty"`
+		Truncated  bool        `json:"truncated_at_depth,omitempty"`
+	}
+
+	count := 0
+	var visit func(id string, depth int) (*node, error)
+	visit = func(id string, depth int) (*node, error) {
+		if count >= limit {
+			return nil, nil
+		}
+		count++
+		n, err := h.c.GetNote(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		out := &node{NoteID: n.NoteID, Title: n.Title, Type: n.Type, Attributes: n.Attributes}
+		if includeContent {
+			c, err := h.c.GetNoteContent(ctx, id)
+			if err != nil {
+				return nil, fmt.Errorf("get_note_subtree: content fetch for %s failed: %w", id, err)
+			}
+			out.Content = c
+		}
+		if depth >= maxDepth {
+			if len(n.ChildNoteIDs) > 0 {
+				out.Truncated = true
+			}
+			return out, nil
+		}
+		for _, childID := range n.ChildNoteIDs {
+			if count >= limit {
+				out.Truncated = true
+				break
+			}
+			child, err := visit(childID, depth+1)
+			if err != nil {
+				return nil, err
+			}
+			if child != nil {
+				out.Children = append(out.Children, child)
+			}
+		}
+		return out, nil
+	}
+	root, err := visit(rootID, 0)
+	if err != nil {
+		return errResult("get_note_subtree failed: %v", err)
+	}
+	return okJSON(map[string]any{
+		"root":          root,
+		"notes_visited": count,
+		"limit":         limit,
+		"max_depth":     maxDepth,
+	})
+}
+
+func strFrom(v any) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return ""
+}
+
+func coerceString(v any) string {
+	switch s := v.(type) {
+	case string:
+		return s
+	case nil:
+		return ""
+	case bool:
+		return strconv.FormatBool(s)
+	case float64:
+		return strconv.FormatFloat(s, 'f', -1, 64)
+	default:
+		b, _ := json.Marshal(s)
+		return string(b)
+	}
 }
