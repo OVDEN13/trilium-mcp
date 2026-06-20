@@ -33,6 +33,14 @@ func NewClient(baseURLs, token string, timeout time.Duration) *Client {
 	var urls []string
 	for _, u := range strings.Split(baseURLs, ",") {
 		u = strings.TrimRight(strings.TrimSpace(u), "/")
+		// The client always builds request paths as "/etapi/...", so the base
+		// URL must NOT already include the "/etapi" prefix. Users commonly copy
+		// the full ETAPI endpoint (e.g. http://localhost:8092/etapi) which would
+		// otherwise produce doubled paths like /etapi/etapi/app-info → 404.
+		// Strip a trailing "/etapi" so both forms work.
+		if rest := strings.TrimSuffix(u, "/etapi"); rest != u {
+			u = strings.TrimRight(rest, "/")
+		}
 		if u != "" {
 			urls = append(urls, u)
 		}

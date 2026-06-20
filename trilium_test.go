@@ -53,6 +53,30 @@ func TestClient_BaseURL_TrailingSlashTrimmed(t *testing.T) {
 	}
 }
 
+func TestClient_BaseURL_EtapiSuffixTrimmed(t *testing.T) {
+	cases := map[string][]string{
+		"http://example.com/etapi":       {"http://example.com"},
+		"http://example.com/etapi/":      {"http://example.com"},
+		"http://localhost:8092/etapi":    {"http://localhost:8092"},
+		"http://a/etapi,http://b/etapi/": {"http://a", "http://b"},
+		"http://example.com":             {"http://example.com"},
+	}
+	for in, want := range cases {
+		c := NewClient(in, "tok", 0)
+		got := c.URLs()
+		if len(got) != len(want) {
+			t.Errorf("NewClient(%q).URLs() = %v, want %v", in, got, want)
+			continue
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Errorf("NewClient(%q).URLs() = %v, want %v", in, got, want)
+				break
+			}
+		}
+	}
+}
+
 func TestClient_FallbackToSecondURL_OnTransportError(t *testing.T) {
 	// First URL: a port nothing is listening on -> connection refused.
 	// Second URL: a real test server that succeeds.
